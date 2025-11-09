@@ -1,3 +1,8 @@
+"scripts": {
+  "start": "node server/signaling-server.js",
+  "server": "node server/signaling-server.js",
+  "compile": "tsc -p ."
+}
 {
   "name": "webrtc-collab-perfect",
   "displayName": "WebRTC Collab \u2014 Perfect",
