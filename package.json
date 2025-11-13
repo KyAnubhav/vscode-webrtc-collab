@@ -1,15 +1,20 @@
 {
-  "name": "webrtc-collab-perfect",
-  "displayName": "WebRTC Collab \u2014 Perfect",
-  "version": "1.0.0",
+  "name": "webrtc-collab-js-full",
+  "displayName": "WebRTC Collab (JS Full)",
   "publisher": "local",
+  "version": "1.0.0",
+  "description": "VS Code WebRTC collaboration extension (JavaScript) + signaling server",
+  "main": "extension.js",
   "engines": {
     "vscode": "^1.70.0"
+  },
+  "scripts": {
+    "start": "node server/signaling-server.js",
+    "server": "node server/signaling-server.js"
   },
   "activationEvents": [
     "onCommand:webrtcCollab.start"
   ],
-  "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
@@ -17,15 +22,6 @@
         "title": "Start WebRTC Collaboration"
       }
     ]
-  },
-  "scripts": {
-    "compile": "tsc -p .",
-    "server": "node server/signaling-server.js"
-  },
-  "devDependencies": {
-    "typescript": "^5.6.3",
-    "@types/node": "^22.7.5",
-    "@types/vscode": "^1.90.0"
   },
   "dependencies": {
     "ws": "^8.18.0"
