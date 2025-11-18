@@ -1,11 +1,11 @@
-const vscode = require('vscode');
+﻿const vscode = require('vscode');
 
 /**
  * Full-featured JS extension
- * - Webview UI with fixed WSS, auto room generation, copy, regenerate
- * - Avatar + color pick
+ * - Webview UI with auto room generation, copy, regenerate
+ * - Color pick for cursor
  * - Presence/user list
- * - Forwards editor changes, cursor and selection updates via DataChannel
+ * - Forwards editor changes via DataChannel
  */
 
 let panel = null;
@@ -15,7 +15,6 @@ let subs = [];
 let myId = '';
 let myName = '';
 let myColor = '';
-let myAvatar = '👤';
 
 function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('webrtcCollab.start', () => {
@@ -62,7 +61,6 @@ function openPanel(context) {
     myName = (typed && typed.trim()) || `User-${Math.floor(Math.random() * 9000 + 1000)}`;
     myId = makeId();
     myColor = COLORS[Math.floor(Math.random() * COLORS.length)];
-    myAvatar = '👤';
 
     panel = vscode.window.createWebviewPanel('webrtcCollab', 'WebRTC Collab (JS)', vscode.ViewColumn.Beside, {
       enableScripts: true,
@@ -77,16 +75,15 @@ function openPanel(context) {
 
       // profile-update from webview (apply locally)
       if (msg.type === 'profile-update' && msg.profile) {
-        myAvatar = msg.profile.avatar || myAvatar;
         myColor = msg.profile.color || myColor;
-        panel.webview.postMessage({ type: 'user-list', users: [{ id: myId, name: myName, color: myColor, avatar: myAvatar }] });
+        panel.webview.postMessage({ type: 'user-list', users: [{ id: myId, name: myName, color: myColor }] });
         return;
       }
 
       if (msg.type === 'dc-open') {
         // send presence and full document
         try {
-          panel.webview.postMessage({ type: 'presence', id: myId, name: myName, color: myColor, avatar: myAvatar, forward: true });
+          panel.webview.postMessage({ type: 'presence', id: myId, name: myName, color: myColor, forward: true });
           const editor = vscode.window.activeTextEditor;
           if (editor) {
             const full = editor.document.getText();
@@ -99,7 +96,7 @@ function openPanel(context) {
       if (msg.type === 'presence') {
         // forward user list to webview UI
         if (!msg.id || msg.id === myId) return;
-        panel.webview.postMessage({ type: 'user-list', users: [{ id: msg.id, name: msg.name, color: msg.color, avatar: msg.avatar }] });
+        panel.webview.postMessage({ type: 'user-list', users: [{ id: msg.id, name: msg.name, color: msg.color }] });
         return;
       }
 
@@ -126,32 +123,34 @@ function openPanel(context) {
         return;
       }
 
+      // Colored cursor without label
       if (msg.type === 'cursor') {
         if (!msg.id || msg.id === myId) return;
         const editor = vscode.window.activeTextEditor;
         if (!editor) return;
         const pos = editor.document.positionAt(msg.pos || 0);
         const range = new vscode.Range(pos, pos);
-        // create decoration with label
         const dec = vscode.window.createTextEditorDecorationType({
-          border: `1px solid ${msg.color}`,
-          after: { contentText: ' ' + (msg.avatar || '') + ' ' + (msg.name || ''), margin: '0 0 0 6px', color: '#111', backgroundColor: msg.color, borderRadius: '3px', fontWeight: '600' }
+          border: `2px solid ${msg.color}`,
+          backgroundColor: hexToRgba(msg.color, 0.1)
         });
         editor.setDecorations(dec, [range]);
-        // dispose after short while to avoid leakage
-        setTimeout(() => dec.dispose(), 5000);
+        setTimeout(() => dec.dispose(), 3000);
         return;
       }
 
+      // Colored selection
       if (msg.type === 'selection') {
         if (!msg.id || msg.id === myId) return;
         const editor = vscode.window.activeTextEditor;
         if (!editor) return;
         const start = editor.document.positionAt(msg.start || 0);
         const end = editor.document.positionAt(msg.end || 0);
-        const dec = vscode.window.createTextEditorDecorationType({ backgroundColor: hexToRgba(msg.color || '#888888', 0.22) });
+        const dec = vscode.window.createTextEditorDecorationType({ 
+          backgroundColor: hexToRgba(msg.color || '#888888', 0.22) 
+        });
         editor.setDecorations(dec, [new vscode.Range(start, end)]);
-        setTimeout(() => dec.dispose(), 5000);
+        setTimeout(() => dec.dispose(), 3000);
         return;
       }
 
@@ -174,25 +173,22 @@ function openPanel(context) {
     });
     subs.push(send);
 
-    // cursor / selection updates
+    // cursor updates only (no selection)
     const cursorSend = vscode.window.onDidChangeTextEditorSelection(ev => {
       if (!panel || applyingRemote) return;
       const editor = ev.textEditor;
       if (!editor) return;
       const pos = editor.document.offsetAt(editor.selection.active);
-      panel.webview.postMessage({ type: 'cursor', pos, id: myId, name: myName, color: myColor, avatar: myAvatar, forward: true });
-      const sel = editor.selection;
-      if (!sel.isEmpty) {
-        panel.webview.postMessage({ type: 'selection', start: editor.document.offsetAt(sel.start), end: editor.document.offsetAt(sel.end), id: myId, name: myName, color: myColor, avatar: myAvatar, forward: true });
-      }
+      panel.webview.postMessage({ type: 'cursor', pos, id: myId, name: myName, color: myColor, forward: true });
     });
     subs.push(cursorSend);
 
     panel.onDidDispose(() => cleanup());
     // initial local presence
-    panel.webview.postMessage({ type: 'user-list', users: [{ id: myId, name: myName, color: myColor, avatar: myAvatar }] });
+    panel.webview.postMessage({ type: 'user-list', users: [{ id: myId, name: myName, color: myColor }] });
   });
 }
+
 /** cleanup */
 function cleanup() {
   while (subs.length) {
@@ -217,12 +213,11 @@ function getHtml(webview) {
   const csp = `default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'unsafe-inline' ${webview.cspSource}; connect-src wss: wss: https:`;
   const defaultRoom = randRoom();
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>
-  body{font-family:Segoe UI,Arial,system-ui;margin:12px} .row{margin-bottom:8px} #users{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap} .user{padding:4px 8px;border-radius:12px;color:#111;font-weight:600;display:flex;align-items:center;gap:6px} #log{background:#111;color:#eee;padding:8px;border-radius:6px;height:110px;overflow:auto} input{padding:6px} button{padding:6px 10px;margin-right:6px} .meta{display:flex;gap:8px;align-items:center} .avatar{font-size:18px}
+  body{font-family:Segoe UI,Arial,system-ui;margin:12px} .row{margin-bottom:8px} #users{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap} .user{padding:4px 8px;border-radius:12px;color:#111;font-weight:600;display:flex;align-items:center;gap:6px} #log{background:#111;color:#eee;padding:8px;border-radius:6px;height:110px;overflow:auto} input{padding:6px} button{padding:6px 10px;margin-right:6px} .meta{display:flex;gap:8px;align-items:center}
   </style></head><body>
-  <h3>WebRTC Collab — JS Full</h3>
-  <div class="row meta">Signaling (fixed): <input id="ws" value="${DEFAULT_WSS}" style="width:360px" readonly /></div>
+  <h3>WebRTC Collaboration</h3>
   <div class="row meta">Room: <input id="room" value="${defaultRoom}" style="width:180px" /><button id="regen">Regenerate</button><button id="copy">Copy</button></div>
-  <div class="row meta">Avatar: <select id="avatar" style="width:80px"><option>👤</option><option>🦊</option><option>🐱</option><option>🐶</option><option>🦄</option><option>🤖</option><option>🧑‍💻</option></select> Color: <input id="color" type="color" value="#ff79c6" /><button id="applyProfile">Apply</button></div>
+  <div class="row meta">Your Color: <input id="color" type="color" value="#ff79c6" /><button id="applyProfile">Apply</button></div>
   <div class="row"><button id="host">Host</button><button id="join">Join</button><button id="disc" disabled>Disconnect</button></div>
   <div id="users"></div><div id="log"></div>
   <script>
@@ -233,11 +228,9 @@ function getHtml(webview) {
     const hostBtn = document.getElementById('host');
     const joinBtn = document.getElementById('join');
     const discBtn = document.getElementById('disc');
-    const wsInput = document.getElementById('ws');
     const roomInput = document.getElementById('room');
     const regenBtn = document.getElementById('regen');
     const copyBtn = document.getElementById('copy');
-    const avatarSel = document.getElementById('avatar');
     const colorInp = document.getElementById('color');
     const applyProfile = document.getElementById('applyProfile');
 
@@ -254,7 +247,7 @@ function getHtml(webview) {
       usersEl.innerHTML='';
       if(!Array.isArray(users)) return;
       for(const u of users){
-        const el=document.createElement('div'); el.className='user'; el.style.background=u.color||'#ddd'; el.innerHTML='<span class=\"avatar\">'+(u.avatar||'👤')+'</span><span>'+(u.name||'User')+'</span>'; usersEl.appendChild(el);
+        const el=document.createElement('div'); el.className='user'; el.style.background=u.color||'#ddd'; el.innerHTML='<span>'+(u.name||'User')+'</span>'; usersEl.appendChild(el);
       }
     }
 
@@ -274,7 +267,7 @@ function getHtml(webview) {
     async function start(r){
       reset(); offerSent=false; role=r; room=(roomInput.value||'').trim(); if(!room){ log('Room cannot be empty'); return; } setState('connecting'); ensurePC(); if(role==='host'){ wire(pc.createDataChannel('code')); } else { pc.ondatachannel = e => wire(e.channel); }
 
-      socket = new WebSocket(wsInput.value);
+      socket = new WebSocket('${DEFAULT_WSS}');
       socket.onopen = async () => { log('WS connected'); socket.send(JSON.stringify({ type: (role==='host') ? 'create' : 'join', room })); };
       socket.onmessage = async ev => {
         const msg = JSON.parse(ev.data);
@@ -335,7 +328,7 @@ function getHtml(webview) {
 
     regenBtn.onclick = () => { roomInput.value = (Math.random().toString(36).substr(2,9)).toUpperCase(); };
     copyBtn.onclick = async () => { try{ await navigator.clipboard.writeText(roomInput.value); log('Room copied to clipboard'); }catch(e){ log('Copy failed'); } };
-    applyProfile.onclick = () => { const profile = { avatar: avatarSel.value, color: colorInp.value }; try{ vscode.postMessage({ type: 'profile-update', profile, forward: false }); }catch(e){} log('Profile applied'); };
+    applyProfile.onclick = () => { const profile = { color: colorInp.value }; try{ vscode.postMessage({ type: 'profile-update', profile, forward: false }); }catch(e){} log('Color applied'); };
 
     hostBtn.onclick = () => start('host');
     joinBtn.onclick = () => start('join');
