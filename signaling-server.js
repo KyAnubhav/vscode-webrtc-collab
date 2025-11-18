@@ -1,11 +1,11 @@
-// server/signaling-server.js
+// signaling-server.js
 const http = require('http');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
-  // CORS headers for all responses
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -23,35 +23,18 @@ const server = http.createServer((req, res) => {
   }
   
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('WebRTC signaling server');
+  res.end('WebRTC signaling server - Healthy');
 });
 
 const wss = new WebSocket.Server({ 
   server,
-  // Handle potential path-based WebSocket connections
-  path: '/',
-  // Disable client tracking for better performance
-  clientTracking: true
-});
-
-// Handle WebSocket upgrade
-server.on('upgrade', (req, socket, head) => {
-  // You can add authentication or validation here if needed
-  wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req);
-  });
+  path: '/'
 });
 
 const rooms = new Map();
 
 wss.on('connection', (ws, req) => {
   console.log('WS: New connection from', req.socket.remoteAddress);
-
-  ws.isAlive = true;
-  
-  ws.on('pong', () => {
-    ws.isAlive = true;
-  });
 
   ws.on('message', (raw) => {
     let msg;
@@ -129,6 +112,7 @@ wss.on('connection', (ws, req) => {
       rooms.get(ws.room).delete(ws);
       if (rooms.get(ws.room).size === 0) {
         rooms.delete(ws.room);
+        console.log(`Room ${ws.room} deleted (empty)`);
       }
     }
   });
@@ -138,18 +122,8 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-// Heartbeat to check for dead connections
-setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (!ws.isAlive) {
-      return ws.terminate();
-    }
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Signaling server running on port ${PORT}`);
   console.log(`WebSocket available at ws://0.0.0.0:${PORT}`);
+  console.log(`Health check at http://0.0.0.0:${PORT}/health`);
 });

@@ -1,7 +1,7 @@
 {
   "name": "webrtc-collab-js-full",
   "displayName": "WebRTC Collab (JS Full)",
-  "publisher": "local",
+  "publisher": "local", 
   "version": "1.0.0",
   "description": "VS Code WebRTC collaboration extension (JavaScript) + signaling server",
   "main": "extension.js",
@@ -9,8 +9,8 @@
     "vscode": "^1.70.0"
   },
   "scripts": {
-    "start": "node server/signaling-server.js",
-    "server": "node server/signaling-server.js"
+    "start": "node signaling-server.js",
+    "server": "node signaling-server.js"
   },
   "activationEvents": [
     "onCommand:webrtcCollab.start"
