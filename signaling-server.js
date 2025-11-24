@@ -1,129 +1,94 @@
-// signaling-server.js
-const http = require('http');
-const WebSocket = require('ws');
+// signaling-server.js - Updated, Safe, Render-Ready Signaling Server
+const WebSocket = require("ws");
+const http = require("http");
 
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  
-  if (req.method === 'OPTIONS') {
-    res.writeHead(200);
-    res.end();
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("OK");
     return;
   }
+  res.writeHead(404);
+  res.end();
+});
 
-  if (req.url === '/health' || req.url === '/healthz') {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ok');
-    return;
+const wss = new WebSocket.Server({ server });
+
+/**
+ * Rooms:
+ * {
+ *   roomId: Set<WebSocket>
+ * }
+ */
+const rooms = {};
+
+function cleanupDeadSockets(roomId) {
+  if (!rooms[roomId]) return;
+  rooms[roomId] = new Set([...rooms[roomId]].filter(ws => ws.readyState === WebSocket.OPEN));
+  if (rooms[roomId].size === 0) delete rooms[roomId];
+}
+
+function broadcast(roomId, obj, exceptSocket = null) {
+  if (!rooms[roomId]) return;
+  const msg = JSON.stringify(obj);
+  for (const ws of rooms[roomId]) {
+    if (ws !== exceptSocket && ws.readyState === WebSocket.OPEN) {
+      ws.send(msg);
+    }
   }
-  
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('WebRTC signaling server - Healthy');
-});
+}
 
-const wss = new WebSocket.Server({ 
-  server,
-  path: '/'
-});
+wss.on("connection", ws => {
+  let joinedRoom = null;
 
-const rooms = new Map();
-
-wss.on('connection', (ws, req) => {
-  console.log('WS: New connection from', req.socket.remoteAddress);
-
-  ws.on('message', (raw) => {
-    let msg;
-    try { 
-      msg = JSON.parse(raw); 
-    } catch (err) {
-      console.warn('WS: invalid json', raw.toString());
+  ws.on("message", data => {
+    let msg = null;
+    try {
+      msg = JSON.parse(data);
+    } catch {
       return;
     }
 
-    console.log('WS RECV:', msg.type, 'room:', msg.room || '');
+    if (!msg.type) return;
 
-    if (msg.type === 'create' || msg.type === 'join') {
-      if (!msg.room) {
-        console.warn('WS: No room specified');
-        return;
-      }
-      
-      if (!rooms.has(msg.room)) {
-        rooms.set(msg.room, new Set());
-      }
-      rooms.get(msg.room).add(ws);
-      ws.room = msg.room;
+    // CREATE new room
+    if (msg.type === "create") {
+      joinedRoom = msg.room;
+      rooms[joinedRoom] = rooms[joinedRoom] || new Set();
+      rooms[joinedRoom].add(ws);
 
-      // Send room state to the new connection
-      try {
-        ws.send(JSON.stringify({ 
-          type: 'room-state', 
-          room: msg.room, 
-          count: rooms.get(msg.room).size 
-        }));
-      } catch (e) {
-        console.warn('WS: Error sending room-state');
-      }
-
-      // Notify other peers in the room
-      for (const peer of rooms.get(msg.room)) {
-        if (peer !== ws && peer.readyState === WebSocket.OPEN) {
-          try {
-            peer.send(JSON.stringify({ 
-              type: 'peer-joined', 
-              room: msg.room 
-            }));
-          } catch (e) {
-            console.warn('WS: Error notifying peer');
-          }
-        }
-      }
-
-      console.log(`WS: ${msg.type} => joined ${msg.room} (size=${rooms.get(msg.room).size})`);
+      ws.send(JSON.stringify({ type: "room-state", count: rooms[joinedRoom].size }));
       return;
     }
 
-    // Relay other messages to peers in the same room
-    if (msg.room && rooms.has(msg.room)) {
-      const peers = rooms.get(msg.room);
-      let relayed = 0;
-      for (const peer of peers) {
-        if (peer !== ws && peer.readyState === WebSocket.OPEN) {
-          try { 
-            peer.send(JSON.stringify(msg)); 
-            relayed++; 
-          } catch (e) {
-            console.warn('WS: Error relaying message');
-          }
-        }
-      }
-      console.log('WS RELAY:', msg.type, 'to', relayed, 'peers');
+    // JOIN existing
+    if (msg.type === "join") {
+      joinedRoom = msg.room;
+      rooms[joinedRoom] = rooms[joinedRoom] || new Set();
+      rooms[joinedRoom].add(ws);
+
+      broadcast(joinedRoom, { type: "peer-joined" }, ws);
+      ws.send(JSON.stringify({ type: "room-state", count: rooms[joinedRoom].size }));
+      return;
+    }
+
+    // OFFER / ANSWER / ICE → relay inside room
+    if (["offer", "answer", "candidate"].includes(msg.type) && joinedRoom) {
+      broadcast(joinedRoom, msg, ws);
     }
   });
 
-  ws.on('close', () => {
-    console.log('WS: Connection closed');
-    if (ws.room && rooms.has(ws.room)) {
-      rooms.get(ws.room).delete(ws);
-      if (rooms.get(ws.room).size === 0) {
-        rooms.delete(ws.room);
-        console.log(`Room ${ws.room} deleted (empty)`);
-      }
+  ws.on("close", () => {
+    if (joinedRoom && rooms[joinedRoom]) {
+      rooms[joinedRoom].delete(ws);
+      cleanupDeadSockets(joinedRoom);
     }
-  });
-
-  ws.on('error', (error) => {
-    console.log('WS: Error:', error);
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, () => {
   console.log(`Signaling server running on port ${PORT}`);
-  console.log(`WebSocket available at ws://0.0.0.0:${PORT}`);
-  console.log(`Health check at http://0.0.0.0:${PORT}/health`);
+  console.log(`Health: http://0.0.0.0:${PORT}/health`);
 });

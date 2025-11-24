@@ -1,17 +1,16 @@
 {
-  "name": "webrtc-collab-js-full",
-  "displayName": "WebRTC Collab (JS Full)",
-  "publisher": "local", 
+  "name": "vscode-webrtc-collab",
+  "displayName": "WebRTC Collab (Yjs)",
+  "description": "VS Code collaborative WebRTC extension with Yjs CRDT",
   "version": "1.0.0",
-  "description": "VS Code WebRTC collaboration extension (JavaScript) + signaling server",
-  "main": "extension.js",
+  "publisher": "your-name-here",
   "engines": {
-    "vscode": "^1.70.0"
+    "vscode": "^1.80.0"
   },
-  "scripts": {
-    "start": "node signaling-server.js",
-    "server": "node signaling-server.js"
-  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
   "activationEvents": [
     "onCommand:webrtcCollab.start"
   ],
@@ -19,11 +18,15 @@
     "commands": [
       {
         "command": "webrtcCollab.start",
-        "title": "Start WebRTC Collaboration"
+        "title": "WebRTC Collab (Yjs)",
+        "category": "Collaboration"
       }
     ]
   },
+  "scripts": {
+    "start": "node signaling-server.js"
+  },
   "dependencies": {
-    "ws": "^8.18.0"
+    "ws": "^8.17.0"
   }
 }
