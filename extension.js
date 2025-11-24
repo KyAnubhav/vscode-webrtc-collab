@@ -13,6 +13,10 @@ let myColor = "";
 // Reuse cursor decorations per remote user to avoid lag
 const cursorDecorations = new Map();
 
+// Autosave timer for Yjs-applied changes
+let autosaveTimer = null;
+const AUTOSAVE_DELAY_MS = 2000;
+
 const COLORS = [
   "#ff5555",
   "#55ff55",
@@ -62,6 +66,19 @@ function hexToRgba(hex, alpha = 0.22) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+function scheduleAutosave(document) {
+  if (!document) return;
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer);
+  }
+  autosaveTimer = setTimeout(() => {
+    autosaveTimer = null;
+    if (document.isDirty) {
+      document.save().catch(() => {});
+    }
+  }, AUTOSAVE_DELAY_MS);
+}
+
 function openPanel(context) {
   if (panel) {
     panel.reveal(vscode.ViewColumn.Beside);
@@ -98,8 +115,20 @@ function openPanel(context) {
       const recv = panel.webview.onDidReceiveMessage(async (msg) => {
         if (!msg || typeof msg.type !== "string") return;
 
+        // Color / profile change from webview
         if (msg.type === "profile-update" && msg.profile) {
           myColor = msg.profile.color || myColor;
+
+          // Update my presence and broadcast to peers
+          panel.webview.postMessage({
+            type: "presence",
+            id: myId,
+            name: myName,
+            color: myColor,
+            forward: true, // forward via DC to others
+          });
+
+          // Update my local user list
           panel.webview.postMessage({
             type: "user-list",
             users: [{ id: myId, name: myName, color: myColor }],
@@ -114,9 +143,12 @@ function openPanel(context) {
           return;
         }
 
-        // DataChannel just opened → send presence + current file text once
+        // DataChannel just opened → send presence always
+        // Only HOST also pushes initial file into Yjs
         if (msg.type === "dc-open") {
+          const editor = vscode.window.activeTextEditor;
           try {
+            // Send my presence (color / name) and forward to peers
             panel.webview.postMessage({
               type: "presence",
               id: myId,
@@ -125,14 +157,13 @@ function openPanel(context) {
               forward: true,
             });
 
-            const editor = vscode.window.activeTextEditor;
-            if (editor) {
+            // If I am host, push current editor text into Yjs
+            if (msg.role === "host" && editor) {
               const full = editor.document.getText();
-              // send current file into Yjs as initial state
               panel.webview.postMessage({
                 type: "editor-change",
                 text: full,
-                forward: false, // don't forward over DC again
+                forward: false, // do not re-forward; Yjs handles sync
                 source: "vscode-initial",
               });
             }
@@ -150,7 +181,7 @@ function openPanel(context) {
         }
 
         if (msg.type === "editor-change") {
-          // This comes from Yjs (remote/local CRDT result) → apply to VS Code editor
+          // This comes from Yjs (CRDT result) → apply to VS Code editor
           const editor = vscode.window.activeTextEditor;
           if (!editor) return;
           try {
@@ -163,6 +194,8 @@ function openPanel(context) {
             await editor.edit((ed) => {
               ed.replace(fullRange, newText);
             });
+            // Autosave after remote/Yjs-driven changes
+            scheduleAutosave(editor.document);
           } finally {
             applyingRemote = false;
           }
@@ -177,7 +210,7 @@ function openPanel(context) {
           const pos = editor.document.positionAt(msg.pos || 0);
           const range = new vscode.Range(pos, pos);
 
-          // Reuse one decoration per remote user to avoid lag
+          // Reuse one decoration per remote user; colored caret only (no label)
           let dec = cursorDecorations.get(msg.id);
           if (!dec) {
             dec = vscode.window.createTextEditorDecorationType({
@@ -192,13 +225,13 @@ function openPanel(context) {
         }
 
         if (msg.type === "presence-leave") {
-          // clear decorations if needed
-          for (const [id, dec] of cursorDecorations.entries()) {
+          // clear all remote decorations
+          for (const [, dec] of cursorDecorations.entries()) {
             try {
               dec.dispose();
             } catch {}
-            cursorDecorations.delete(id);
           }
+          cursorDecorations.clear();
           panel.webview.postMessage({ type: "user-list", users: [] });
           return;
         }
@@ -206,7 +239,11 @@ function openPanel(context) {
 
       subs.push(recv);
 
-      // Local VS Code edits → push into Yjs (webview) once, but avoid loops
+      // Throttled local-cursor sending to avoid lag
+      let lastCursorSentTime = 0;
+      let lastCursorOffset = -1;
+
+      // Local VS Code edits → push into Yjs (webview), but avoid loops
       const send = vscode.workspace.onDidChangeTextDocument((ev) => {
         if (!panel || applyingRemote) return;
         const editor = vscode.window.activeTextEditor;
@@ -228,6 +265,16 @@ function openPanel(context) {
         const editor = ev.textEditor;
         if (!editor) return;
         const pos = editor.document.offsetAt(editor.selection.active);
+
+        const now = Date.now();
+        if (
+          now - lastCursorSentTime < 80 &&
+          Math.abs(pos - lastCursorOffset) < 1
+        ) {
+          return; // throttle
+        }
+        lastCursorSentTime = now;
+        lastCursorOffset = pos;
 
         panel.webview.postMessage({
           type: "cursor",
@@ -303,8 +350,9 @@ function getHtml(webview, yjsUri) {
 body{font-family:Segoe UI,Arial,system-ui;margin:12px}
 .row{margin-bottom:8px}
 #users{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
-.user{padding:4px 8px;border-radius:12px;color:#111;font-weight:600;display:flex;align-items:center;gap:6px}
-#log{background:#111;color:#eee;padding:8px;border-radius:6px;height:110px;overflow:auto}
+.user{padding:4px 8px;border-radius:12px;color:#111;font-weight:600;display:flex;align-items:center;gap:6px;opacity:0.8;transition:opacity 0.3s ease, transform 0.15s ease}
+.user.active{opacity:1;transform:scale(1.03)}
+#log{background:#111;color:#eee;padding:8px;border-radius:6px;height:110px;overflow:auto;font-size:12px}
 input{padding:6px}
 button{padding:6px 10px;margin-right:6px}
 .meta{display:flex;gap:8px;align-items:center}
@@ -389,8 +437,15 @@ function updateUserList(users){
     el.className="user";
     el.style.background=u.color||"#ddd";
     el.innerHTML="<span>"+(u.name||"User")+"</span>";
+    el.dataset.id = u.id || "";
     usersEl.appendChild(el);
   }
+}
+function pulseUser(id){
+  const el = [...usersEl.children].find(c => c.dataset.id === id);
+  if (!el) return;
+  el.classList.add("active");
+  setTimeout(() => el.classList.remove("active"), 200);
 }
 
 // Broadcast local Yjs updates over DataChannel
@@ -446,7 +501,8 @@ function wire(ch){
   dc=ch;
   dc.onopen=()=>{
     log("DataChannel open");
-    vscode.postMessage({ type:"dc-open" });
+    // Tell extension that DC is open and whether we're host or join
+    vscode.postMessage({ type:"dc-open", role });
 
     // send current Yjs state to peer
     try {
@@ -470,6 +526,11 @@ function wire(ch){
         isApplyingRemoteY = false;
       }
       return;
+    }
+
+    if (msg.type === "cursor" && msg.id) {
+      // ghost caret pulse in user list
+      pulseUser(msg.id);
     }
 
     // forward presence/cursor/editor messages to extension
