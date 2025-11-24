@@ -1,94 +1,98 @@
-// signaling-server.js - Updated, Safe, Render-Ready Signaling Server
+// Lightweight WebRTC signaling server using WebSockets
 const WebSocket = require("ws");
-const http = require("http");
 
 const PORT = process.env.PORT || 10000;
 
-const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("OK");
-    return;
-  }
-  res.writeHead(404);
-  res.end();
-});
+const wss = new WebSocket.Server({ port: PORT });
+console.log("Signaling server running on port", PORT);
 
-const wss = new WebSocket.Server({ server });
+const rooms = new Map(); // roomId → Set of sockets
 
-/**
- * Rooms:
- * {
- *   roomId: Set<WebSocket>
- * }
- */
-const rooms = {};
-
-function cleanupDeadSockets(roomId) {
-  if (!rooms[roomId]) return;
-  rooms[roomId] = new Set([...rooms[roomId]].filter(ws => ws.readyState === WebSocket.OPEN));
-  if (rooms[roomId].size === 0) delete rooms[roomId];
-}
-
-function broadcast(roomId, obj, exceptSocket = null) {
-  if (!rooms[roomId]) return;
-  const msg = JSON.stringify(obj);
-  for (const ws of rooms[roomId]) {
-    if (ws !== exceptSocket && ws.readyState === WebSocket.OPEN) {
-      ws.send(msg);
-    }
+function safeSend(ws, msg) {
+  try {
+    ws.send(JSON.stringify(msg));
+  } catch (err) {
+    console.error("WS send error:", err);
   }
 }
 
-wss.on("connection", ws => {
+wss.on("connection", (socket) => {
   let joinedRoom = null;
 
-  ws.on("message", data => {
-    let msg = null;
+  socket.on("message", (raw) => {
+    let msg;
     try {
-      msg = JSON.parse(data);
+      msg = JSON.parse(raw);
     } catch {
       return;
     }
 
-    if (!msg.type) return;
+    const { type, room, sdp, candidate } = msg;
 
-    // CREATE new room
-    if (msg.type === "create") {
-      joinedRoom = msg.room;
-      rooms[joinedRoom] = rooms[joinedRoom] || new Set();
-      rooms[joinedRoom].add(ws);
+    // CREATE ROOM
+    if (type === "create") {
+      joinedRoom = room;
+      if (!rooms.has(room)) rooms.set(room, new Set());
+      rooms.get(room).add(socket);
 
-      ws.send(JSON.stringify({ type: "room-state", count: rooms[joinedRoom].size }));
+      safeSend(socket, {
+        type: "room-state",
+        room,
+        count: rooms.get(room).size
+      });
       return;
     }
 
-    // JOIN existing
-    if (msg.type === "join") {
-      joinedRoom = msg.room;
-      rooms[joinedRoom] = rooms[joinedRoom] || new Set();
-      rooms[joinedRoom].add(ws);
+    // JOIN ROOM
+    if (type === "join") {
+      joinedRoom = room;
+      if (!rooms.has(room)) rooms.set(room, new Set());
+      rooms.get(room).add(socket);
 
-      broadcast(joinedRoom, { type: "peer-joined" }, ws);
-      ws.send(JSON.stringify({ type: "room-state", count: rooms[joinedRoom].size }));
+      // Notify host that someone joined
+      rooms.get(room).forEach(ws => {
+        if (ws !== socket) {
+          safeSend(ws, { type: "peer-joined", room });
+        }
+      });
+
+      safeSend(socket, {
+        type: "room-state",
+        room,
+        count: rooms.get(room).size
+      });
       return;
     }
 
-    // OFFER / ANSWER / ICE → relay inside room
-    if (["offer", "answer", "candidate"].includes(msg.type) && joinedRoom) {
-      broadcast(joinedRoom, msg, ws);
+    // OTHER SIGNALS: OFFER / ANSWER / CANDIDATE
+    if (["offer", "answer", "candidate"].includes(type)) {
+      const members = rooms.get(room);
+      if (!members) return;
+
+      members.forEach((ws) => {
+        if (ws !== socket) {
+          safeSend(ws, { type, room, sdp, candidate });
+        }
+      });
     }
   });
 
-  ws.on("close", () => {
-    if (joinedRoom && rooms[joinedRoom]) {
-      rooms[joinedRoom].delete(ws);
-      cleanupDeadSockets(joinedRoom);
+  socket.on("close", () => {
+    if (joinedRoom && rooms.has(joinedRoom)) {
+      const set = rooms.get(joinedRoom);
+      set.delete(socket);
+      if (set.size === 0) rooms.delete(joinedRoom);
     }
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Signaling server running on port ${PORT}`);
-  console.log(`Health: http://0.0.0.0:${PORT}/health`);
-});
+// Health-check for Render.com
+const http = require("http");
+http
+  .createServer((req, res) => {
+    res.writeHead(200);
+    res.end("OK");
+  })
+  .listen(process.env.PORT_HTTP || 3000, () => {
+    console.log("HTTP health check running");
+  });

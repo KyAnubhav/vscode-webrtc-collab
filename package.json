@@ -1,15 +1,12 @@
 {
   "name": "vscode-webrtc-collab",
   "displayName": "WebRTC Collab (Yjs)",
-  "description": "VS Code collaborative WebRTC extension with Yjs CRDT",
+  "description": "Peer-to-peer collaborative editing using WebRTC + Yjs CRDT inside a VS Code extension.",
   "version": "1.0.0",
   "publisher": "your-name-here",
   "engines": {
-    "vscode": "^1.80.0"
+    "vscode": "^1.90.0"
   },
-  "categories": [
-    "Other"
-  ],
   "main": "./extension.js",
   "activationEvents": [
     "onCommand:webrtcCollab.start"
@@ -18,13 +15,13 @@
     "commands": [
       {
         "command": "webrtcCollab.start",
-        "title": "WebRTC Collab (Yjs)",
-        "category": "Collaboration"
+        "title": "WebRTC Collaboration"
       }
     ]
   },
   "scripts": {
-    "start": "node signaling-server.js"
+    "start": "node signaling-server.js",
+    "build": "echo \"No build step needed\""
   },
   "dependencies": {
     "ws": "^8.17.0"
