@@ -1,12 +1,18 @@
-// Lightweight WebRTC signaling server using WebSockets
+const http = require("http");
 const WebSocket = require("ws");
 
 const PORT = process.env.PORT || 10000;
 
-const wss = new WebSocket.Server({ port: PORT });
-console.log("Signaling server running on port", PORT);
+// Create one shared HTTP server (Render requires this)
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end("OK");
+});
 
-const rooms = new Map(); // roomId → Set of sockets
+const wss = new WebSocket.Server({ server });
+
+// Room map: roomId → Set of sockets
+const rooms = new Map();
 
 function safeSend(ws, msg) {
   try {
@@ -20,12 +26,8 @@ wss.on("connection", (socket) => {
   let joinedRoom = null;
 
   socket.on("message", (raw) => {
-    let msg;
-    try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
-    }
+    let msg = null;
+    try { msg = JSON.parse(raw); } catch { return; }
 
     const { type, room, sdp, candidate } = msg;
 
@@ -49,8 +51,8 @@ wss.on("connection", (socket) => {
       if (!rooms.has(room)) rooms.set(room, new Set());
       rooms.get(room).add(socket);
 
-      // Notify host that someone joined
-      rooms.get(room).forEach(ws => {
+      // Notify existing members
+      rooms.get(room).forEach((ws) => {
         if (ws !== socket) {
           safeSend(ws, { type: "peer-joined", room });
         }
@@ -61,10 +63,11 @@ wss.on("connection", (socket) => {
         room,
         count: rooms.get(room).size
       });
+
       return;
     }
 
-    // OTHER SIGNALS: OFFER / ANSWER / CANDIDATE
+    // RELAY OFFER / ANSWER / ICE
     if (["offer", "answer", "candidate"].includes(type)) {
       const members = rooms.get(room);
       if (!members) return;
@@ -86,13 +89,6 @@ wss.on("connection", (socket) => {
   });
 });
 
-// Health-check for Render.com
-const http = require("http");
-http
-  .createServer((req, res) => {
-    res.writeHead(200);
-    res.end("OK");
-  })
-  .listen(process.env.PORT_HTTP || 3000, () => {
-    console.log("HTTP health check running");
-  });
+server.listen(PORT, () => {
+  console.log("Signaling server running on PORT", PORT);
+});

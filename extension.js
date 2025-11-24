@@ -328,7 +328,8 @@ function randRoom(len = 9) {
 }
 
 function getHtml(webview, yjsUri) {
-  const DEFAULT_WSS = "ws://localhost:10000";
+  const DEFAULT_WSS = "wss://vscode-webrtc-signaling.onrender.com";
+
 
   const csp = `
     default-src 'none';
